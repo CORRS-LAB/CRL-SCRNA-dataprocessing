@@ -8,7 +8,7 @@ This repository contains a demonstration workflow for analyzing single-cell RNA 
 
 The analysis uses a subset of kidney scRNA-seq data stored in `kidney_demo_input.rds`. 
 
-* **Organism:** Rat (*Rattus norvegicus*)
+* **Species:** Rat (*Rattus norvegicus*)
 * **Sample Groups:**
     * **HS:** High Salt diet group (Samples containing "HS" in ID)
     * **LS:** Low Salt diet group (Samples containing "LS" in ID)
