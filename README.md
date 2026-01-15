@@ -1,9 +1,6 @@
-This project contains data processing code for single-cell RNA-sequencing data from CRL rats. Details are in the following.
+# scRNA-seq Data processing for CRL rats (HS vs LS)
 
-
-# Kidney scRNA-seq Analysis Demo (HS vs LS)
-
-This repository contains a demonstration workflow for analyzing single-cell RNA sequencing (scRNA-seq) data from mouse kidney samples. The project focuses on comparing High Salt (HS) and Low Salt (LS) treatment conditions.
+This repository contains a demonstration workflow for analyzing single-cell RNA sequencing (scRNA-seq) data from rat kidney samples. The project focuses on comparing High Salt (HS) and Low Salt (LS) treatment conditions.
 
 > **Note:** This is a **demo version** using a downsampled dataset. The code is optimized for quick reproduction and logic verification, not for biological discovery.
 
