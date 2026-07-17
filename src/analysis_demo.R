@@ -1,173 +1,97 @@
-# Analysis of Kidney scRNA-seq Data (HS vs LS) - DEMO VERSION
-# Project: Kidney Salt Sensitivity Study
-# Description: Standard scRNA-seq pipeline including QC, Doublet Removal, Harmony Integration, and Clustering.
-# Dependencies: Seurat v5, DoubletFinder, Harmony, dplyr, ggplot2
+# End-to-end kidney/PBMC high-salt scRNA-seq workflow.
+# Run from the repository root with:
+#   Rscript src/analysis_demo.R
+# The same file can also be sourced from RStudio.
 
-library(Seurat)
-library(DoubletFinder)
-library(ggplot2)
-library(patchwork)
-library(dplyr)
-library(harmony)
-
-# Set working directory to the current script location
-# Note: When running in RStudio, you can use Session -> Set Working Directory -> To Source File Location
-# setwd("./")
-
-# ------------------------------------------------------------------------------
-# 1. Data Loading
-# ------------------------------------------------------------------------------
-
-# Load pre-processed demo data object instead of raw 10X files
-input_file <- "data/kidney_demo_input.rds"
-
-if (file.exists(input_file)) {
-  pbmc.merged <- readRDS(input_file)
-  message("Success: Demo data loaded.")
-} else {
-  stop("Error: 'kidney_demo_input.rds' not found. Please ensure the data file is in the working directory.")
+locate_this_script <- function() {
+  from_source <- tryCatch(sys.frame(1)$ofile, error = function(e) NULL)
+  if (!is.null(from_source)) return(normalizePath(from_source, winslash = "/", mustWork = FALSE))
+  file_arg <- grep("^--file=", commandArgs(trailingOnly = FALSE), value = TRUE)
+  if (length(file_arg)) return(normalizePath(sub("^--file=", "", file_arg[1]), winslash = "/", mustWork = FALSE))
+  NA_character_
 }
 
-# Calculate mitochondrial percentage
-# Note: Pattern is '^Mt-' for Mouse data (use '^MT-' for Human)
-pbmc.merged[["percent.mt"]] <- PercentageFeatureSet(pbmc.merged, pattern = "^Mt-")
+script_file <- locate_this_script()
+project_root <- if (file.exists(file.path("src", "utils.R"))) "." else if (!is.na(script_file)) dirname(dirname(script_file)) else getwd()
+if (!file.exists(file.path(project_root, "src", "utils.R"))) project_root <- getwd()
+if (!file.exists(file.path(project_root, "src", "utils.R"))) stop("Run this workflow from the repository root.")
 
-# Subset based on QC metrics
-# Demo Adjustment: Lower thresholds are relaxed here to prevent excessive filtering on this small demo dataset.
-# Standard cutoff suggestions: nFeature > 200, percent.mt < 10-20% depending on tissue quality.
-pbmc <- subset(pbmc.merged, subset = nFeature_RNA > 200 & nFeature_RNA < 6000 &
-  nCount_RNA < 25000 & percent.mt < 30)
+source(file.path(project_root, "src", "utils.R"))
+source(file.path(project_root, "src", "annotation.R"))
+source(file.path(project_root, "src", "preprocess.R"))
+source(file.path(project_root, "src", "mechanism_analysis.R"))
+source(file.path(project_root, "src", "communication_analysis.R"))
+source(file.path(project_root, "src", "pbmc_integration.R"))
 
-# ------------------------------------------------------------------------------
-# 2. Doublet Detection (Per-Sample Basis)
-# ------------------------------------------------------------------------------
+parse_cli <- function(args) {
+  defaults <- list(input = file.path(project_root, "data", "kidney_demo_input.rds"),
+                   pbmc = file.path(project_root, "data", "pbmc_demo_input.rds"),
+                   outdir = file.path(project_root, "results"),
+                   seed = 2026L, generate_pbmc = TRUE, doublets = TRUE, markers = TRUE)
+  for (arg in args) {
+    if (!startsWith(arg, "--") || !grepl("=", arg, fixed = TRUE)) next
+    pair <- strsplit(sub("^--", "", arg), "=", fixed = TRUE)[[1]]
+    key <- gsub("-", "_", pair[1]); value <- paste(pair[-1], collapse = "=")
+    if (!key %in% names(defaults)) next
+    if (is.logical(defaults[[key]])) value <- tolower(value) %in% c("true", "1", "yes", "y")
+    if (is.integer(defaults[[key]])) value <- as.integer(value)
+    defaults[[key]] <- value
+  }
+  defaults
+}
 
-samples <- unique(pbmc$orig.ident)
-pbmc_list <- list()
+run_full_workflow <- function(config = parse_cli(commandArgs(trailingOnly = TRUE))) {
+  set.seed(config$seed)
+  assert_packages(c("Seurat", "SeuratObject", "Matrix", "edgeR", "ggplot2", "patchwork"))
+  output_root <- safe_dir_create(config$outdir)
+  if (!file.exists(config$input)) stop("Kidney input not found: ", config$input)
+  message("[1/6] Loading and preprocessing kidney data")
+  kidney_input <- readRDS(config$input)
+  kidney <- preprocess_sc_object(kidney_input, tissue = "Kidney",
+    output_dir = file.path(output_root, "01_kidney_preprocessing"),
+    use_doublet_finder = config$doublets, seed = config$seed, find_markers = config$markers)
 
-for (sample_name in samples) {
-  message("Processing DoubletFinder for: ", sample_name)
+  message("[2/6] Running sample-aware differential expression and pathway analysis")
+  mechanism <- run_mechanism_analysis(kidney, file.path(output_root, "02_high_salt_mechanisms"))
 
-  # Subset current sample
-  seu_sample <- subset(pbmc, subset = orig.ident == sample_name)
-
-  # Safety Check: If cell count is too low (<50) after QC, skip DoubletFinder to avoid errors
-  if (ncol(seu_sample) < 50) {
-    warning(paste("Sample", sample_name, "has too few cells. Skipping DoubletFinder and marking as Singlet."))
-    seu_sample$DoubletStatus <- "Singlet"
-    pbmc_list[[sample_name]] <- seu_sample
-    next
+  message("[3/6] Preparing PBMC data")
+  if (file.exists(config$pbmc)) {
+    pbmc_input <- readRDS(config$pbmc)
+  } else if (config$generate_pbmc) {
+    message("PBMC input was not supplied; generating a clearly labelled simulation for code validation only.")
+    pbmc_input <- generate_pbmc_demo(kidney_input, config$pbmc, seed = config$seed)
+  } else {
+    stop("PBMC input not found and --generate-pbmc=false: ", config$pbmc)
+  }
+  pbmc <- preprocess_sc_object(pbmc_input, tissue = "PBMC",
+    output_dir = file.path(output_root, "03_pbmc_preprocessing"), use_doublet_finder = FALSE,
+    seed = config$seed, resolution = 0.5, find_markers = config$markers)
+  if ("simulated_cell_type" %in% colnames(pbmc[[]])) {
+    pbmc$marker_score_cell_type <- pbmc$cell_type
+    pbmc$cell_type <- pbmc$simulated_cell_type
+    pbmc$cell_class <- broad_cell_class(pbmc$cell_type)
+    pbmc$annotation_source <- "known_simulation_label_for_code_validation"
+    Seurat::Idents(pbmc) <- "cell_type"
   }
 
-  # Standard Pre-processing for DoubletFinder
-  seu_sample <- NormalizeData(seu_sample)
-  seu_sample <- FindVariableFeatures(seu_sample, nfeatures = 2000)
-  seu_sample <- ScaleData(seu_sample)
-  seu_sample <- RunPCA(seu_sample, verbose = FALSE)
+  message("[4/6] Integrating kidney and PBMC response analyses")
+  integration <- run_joint_kidney_pbmc_analysis(kidney, pbmc,
+    file.path(output_root, "04_kidney_pbmc_integration"), seed = config$seed)
 
-  # Demo Adjustment: Using dims 1:10 for stability on small data
-  seu_sample <- RunUMAP(seu_sample, dims = 1:10, verbose = FALSE)
+  message("[5/6] Prioritizing differential communication drivers")
+  communication <- run_communication_analysis(kidney,
+    file.path(output_root, "05_cell_communication"), top_n = 8L)
 
-  # Parameter Sweep
-  sweep.res.list <- paramSweep(seu_sample, PCs = 1:10, sct = FALSE)
-  sweep.stats <- summarizeSweep(sweep.res.list, GT = FALSE)
-  bcmvn <- find.pK(sweep.stats)
-
-  # Select optimal pK
-  pk_opt <- as.numeric(as.character(bcmvn$pK[which.max(bcmvn$BCmetric)]))
-
-  # Define expected doublet rate
-  # Demo Adjustment: Dynamically calculated based on cell count (approx. 5%) to prevent errors
-  nExp_poi <- round(0.05 * ncol(seu_sample))
-  if (nExp_poi == 0) nExp_poi <- 1
-
-  seu_sample <- doubletFinder(seu_sample,
-    PCs = 1:10, pN = 0.25, pK = pk_opt,
-    nExp = nExp_poi, sct = FALSE
-  )
-
-  # Standardize metadata column names for merging
-  df_col <- grep("DF.classifications", colnames(seu_sample@meta.data), value = TRUE)
-  seu_sample$DoubletStatus <- seu_sample@meta.data[[df_col]]
-  pbmc_list[[sample_name]] <- seu_sample
+  message("[6/6] Saving reproducibility metadata")
+  capture.output(sessionInfo(), file = file.path(output_root, "sessionInfo.txt"))
+  config_table <- data.frame(parameter = names(config), value = vapply(config, as.character, character(1)))
+  write_csv_safe(config_table, file.path(output_root, "run_config.csv"))
+  saveRDS(list(kidney = kidney, pbmc = pbmc, mechanism = mechanism,
+               integration = integration, communication = communication),
+          file.path(output_root, "analysis_bundle.rds"))
+  message("Workflow completed. Results: ", output_root)
+  invisible(list(kidney = kidney, pbmc = pbmc, mechanism = mechanism,
+                 integration = integration, communication = communication))
 }
 
-# Re-merge after doublet classification
-pbmc <- merge(pbmc_list[[1]], y = pbmc_list[2:length(pbmc_list)])
-
-# ------------------------------------------------------------------------------
-# 3. Post-Doublet Processing & Batch Correction (Harmony)
-# ------------------------------------------------------------------------------
-
-# Filter doublets
-cat("Total cells before filtering:", ncol(pbmc), "\n")
-pbmc_clean <- subset(pbmc, subset = DoubletStatus == "Singlet")
-cat("Total cells after filtering:", ncol(pbmc_clean), "\n")
-
-# Normalization and Feature Selection
-pbmc_clean <- NormalizeData(pbmc_clean)
-pbmc_clean <- FindVariableFeatures(pbmc_clean, nfeatures = 2000)
-pbmc_clean <- ScaleData(pbmc_clean)
-pbmc_clean <- RunPCA(pbmc_clean, verbose = FALSE)
-
-# Integration using Harmony
-# Integrating based on 'orig.ident' to remove batch effects between samples
-pbmc_clean <- RunHarmony(pbmc_clean, group.by.vars = "orig.ident", assay.use = "RNA", plot_convergence = FALSE)
-
-# ------------------------------------------------------------------------------
-# 4. Clustering and Dimensionality Reduction
-# ------------------------------------------------------------------------------
-
-# Use Harmony embeddings for downstream steps
-# Demo Adjustment: dims=1:10 and resolution=0.3 are optimized for this small subset
-pbmc_clean <- FindNeighbors(pbmc_clean, reduction = "harmony", dims = 1:10)
-pbmc_clean <- FindClusters(pbmc_clean, resolution = 0.3)
-pbmc_clean <- RunUMAP(pbmc_clean, reduction = "harmony", dims = 1:10)
-
-# Save intermediate object
-saveRDS(pbmc_clean, file = "kidney_processed_demo.rds")
-
-# ------------------------------------------------------------------------------
-# 5. Marker Identification & Annotation
-# ------------------------------------------------------------------------------
-
-# Ensure layers are joined (Seurat v5 requirement)
-pbmc_clean <- JoinLayers(pbmc_clean)
-
-# Find all cluster markers
-# Demo Adjustment: 'min.pct' lowered to 0.25 to ensure marker detection in sparse demo data
-cluster_markers <- FindAllMarkers(pbmc_clean, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
-print(head(cluster_markers))
-
-# Cluster Renaming
-# Note: Since this is a random subset, cluster IDs may not match the full dataset.
-# We assign generic names (Type_0, Type_1...) for demonstration.
-current_ids <- levels(pbmc_clean)
-new_cluster_ids <- setNames(paste0("Type_", current_ids), current_ids)
-
-pbmc_clean <- RenameIdents(pbmc_clean, new_cluster_ids)
-pbmc_clean$cell_type <- Idents(pbmc_clean)
-
-# Add Treatment Condition metadata (HS = High Salt, LS = Low Salt)
-pbmc_clean$Treat <- ifelse(grepl("HS", pbmc_clean$orig.ident), "HS", "LS")
-
-# Final Save
-saveRDS(pbmc_clean, file = "kidney_final_demo.rds")
-
-# ------------------------------------------------------------------------------
-# 6. Visualization
-# ------------------------------------------------------------------------------
-
-# UMAP by Cell Type
-p1 <- DimPlot(pbmc_clean, reduction = "umap", label = TRUE, repel = TRUE) +
-  NoLegend() + ggtitle("Cell Types (Demo)")
-
-# UMAP by Treatment Group
-p2 <- DimPlot(pbmc_clean, reduction = "umap", group.by = "Treat") +
-  ggtitle("Treatment Condition")
-
-final_plot <- p1 | p2
-print(final_plot)
-
-# Save plot
-ggsave("Final_UMAP_Results_Demo.png", plot = final_plot, width = 12, height = 5)
+workflow_result <- run_full_workflow()
