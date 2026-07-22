@@ -21,31 +21,34 @@ The analysis uses two Seurat objects stored in the `data` directory.
 
 The R script `src/analysis_demo.R` runs the complete workflow using the following modules:
 
-1.  **QC & Filtering:**
-    * Removes low-quality cells based on mitochondrial content (`percent.mt`), feature counts (`nFeature_RNA`), and total RNA counts (`nCount_RNA`).
-    * Uses relaxed thresholds for the small demonstration datasets.
-2.  **Doublet Detection:**
-    * Uses **DoubletFinder** on a per-sample basis when the package is available.
-    * Records cells as `Not_tested` and continues the workflow when DoubletFinder is unavailable.
-3.  **Preprocessing & Clustering:**
-    * Performs normalization, variable-feature selection, scaling, PCA, graph-based clustering, and UMAP.
-    * Uses **Harmony** for sample correction when available and PCA as the documented fallback.
-4.  **Fine Cell-Type Annotation:**
-    * Identifies cluster marker genes using `FindAllMarkers`.
-    * Annotates kidney tubular, endothelial, stromal, and immune subtypes using a transparent marker reference.
-    * Adds an `Uncertain_` prefix when marker evidence is insufficient for confident annotation.
-5.  **Differential Expression:**
-    * Aggregates counts by biological sample and cell type.
-    * Performs sample-aware pseudobulk differential expression with **edgeR** to avoid treating cells as independent biological replicates.
-6.  **High-Salt Mechanism Analysis:**
-    * Scores osmotic stress, sodium transport, RAAS, inflammation, oxidative stress, fibrosis, endothelial dysfunction, and tissue-injury programs.
-    * Ranks pathway changes using effect size, replicate consistency, gene coverage, and differential-expression evidence.
-7.  **PBMC-Kidney Integration:**
-    * Generates a joint shared-gene embedding of kidney and PBMC cells.
-    * Compares high-salt pathway responses across tissues and shared immune cell classes.
-8.  **Differential Cell-Cell Communication:**
-    * Compares HS and LS ligand-receptor networks at the biological-sample level.
-    * Prioritizes core driver pathways using effect size, replicate consistency, supporting interactions, and statistical evidence.
+1.  **Quality Control and Filtering:**
+    - Removes low-quality cells based on mitochondrial content (`percent.mt`), feature counts (`nFeature_RNA`), and total RNA counts (`nCount_RNA`).
+    - Uses relaxed thresholds for the small demonstration datasets.
+    - Uses **DoubletFinder** on a per-sample basis when the package is available; records cells as `Not_tested` and continues the workflow when unavailable.
+    - **Source file:** `src/preprocess.R`
+
+2.  **Clustering:**
+    - Performs normalization, variable-feature selection, scaling, PCA, graph-based clustering, and UMAP.
+    - Uses **Harmony** for sample correction when available and PCA as the documented fallback.
+    - Identifies cluster marker genes using `FindAllMarkers`; annotates kidney tubular, endothelial, stromal, and immune subtypes using a transparent marker reference; adds an `Uncertain_` prefix when marker evidence is insufficient.
+    - **Source file:** `src/preprocess.R` (clustering), `src/annotation.R` (cell-type annotation)
+
+3.  **Differential Expression Analysis:**
+    - Aggregates counts by biological sample and cell type.
+    - Performs sample-aware pseudobulk differential expression with **edgeR** to avoid treating cells as independent biological replicates.
+    - Scores osmotic stress, sodium transport, RAAS, inflammation, oxidative stress, fibrosis, endothelial dysfunction, and tissue-injury programs.
+    - Ranks pathway changes using effect size, replicate consistency, gene coverage, and differential-expression evidence.
+    - **Source file:** `src/mechanism_analysis.R`
+
+4.  **Cell-Cell Communication Analysis:**
+    - Compares HS and LS ligand-receptor networks at the biological-sample level.
+    - Prioritizes core driver pathways using effect size, replicate consistency, supporting interactions, and statistical evidence.
+    - **Source file:** `src/communication_analysis.R`
+
+5.  **Integration of PBMC and Kidney scRNA-seq Datasets:**
+    - Generates a joint shared-gene embedding of kidney and PBMC cells.
+    - Compares high-salt pathway responses across tissues and shared immune cell classes.
+    - **Source file:** `src/pbmc_integration.R`
 
 The workflow is organized into the following source files:
 
